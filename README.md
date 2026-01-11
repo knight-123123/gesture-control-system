@@ -989,11 +989,6 @@ engine = create_engine("sqlite:///gesture_logs.db", pool_size=5)
 - ✨ 使用Vue 3 + FastAPI
 - ✨ 新增7种手势支持
 
----
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
 
 ---
 
