@@ -1,11 +1,11 @@
 """
 手势识别控制系统后端服务
-版本: 2.2.0
-优化内容:
-- 异步数据库操作
-- 性能指标统计
-- 完善错误处理
-- 配置分离
+版本: 2.3.0
+新增功能:
+- 数据分析API端点
+- 手势识别准确率统计
+- 使用频率分析
+- 响应时间分析
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +40,8 @@ class GestureEvent(BaseModel):
     gesture: str = Field(..., description="手势名称")
     score: float = Field(default=1.0, ge=0.0, le=1.0, description="置信度")
     ts: Optional[float] = Field(default=None, description="时间戳")
+    session_id: Optional[str] = Field(default="default", description="会话ID")
+    response_time: Optional[float] = Field(default=0.0, description="响应时间(ms)")
 
 
 class ConfigUpdate(BaseModel):
@@ -102,7 +104,7 @@ class AppState:
     def add_fps(self, fps: float):
         """添加FPS记录"""
         self.fps_history.append(fps)
-        if len(self.fps_history) > 100:  # 只保留最近100条
+        if len(self.fps_history) > 100:
             self.fps_history.pop(0)
     
     def to_dict(self) -> dict:
@@ -134,6 +136,7 @@ def init_database():
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # 创建表（包含所有字段）
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,15 +144,17 @@ def init_database():
                 gesture TEXT NOT NULL,
                 command TEXT NOT NULL,
                 score REAL NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                response_time REAL DEFAULT 0.0,
+                session_id TEXT DEFAULT 'default',
+                is_correct INTEGER DEFAULT 1
             )
         """)
         
-        # 创建索引加速查询
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_logs_time 
-            ON logs(time DESC)
-        """)
+        # 创建索引
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_time ON logs(time DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_gesture ON logs(gesture)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs(session_id)")
         
         conn.commit()
         conn.close()
@@ -159,22 +164,42 @@ def init_database():
         raise
 
 
-async def insert_log_async(t: float, gesture: str, command: str, score: float):
+async def insert_log_async(
+    t: float, 
+    gesture: str, 
+    command: str, 
+    score: float,
+    response_time: float = 0.0,
+    session_id: str = "default",
+    is_correct: int = 1
+):
     """异步插入日志"""
     try:
-        await asyncio.to_thread(_insert_log_sync, t, gesture, command, score)
+        await asyncio.to_thread(
+            _insert_log_sync, t, gesture, command, score, 
+            response_time, session_id, is_correct
+        )
     except Exception as e:
         logger.error(f"日志插入失败: {e}")
         app_state.error_count += 1
 
 
-def _insert_log_sync(t: float, gesture: str, command: str, score: float):
-    """同步插入日志(在线程中执行)"""
+def _insert_log_sync(
+    t: float, 
+    gesture: str, 
+    command: str, 
+    score: float,
+    response_time: float,
+    session_id: str,
+    is_correct: int
+):
+    """同步插入日志"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO logs(time, gesture, command, score) VALUES (?, ?, ?, ?)",
-        (t, gesture, command, score)
+        """INSERT INTO logs(time, gesture, command, score, response_time, session_id, is_correct) 
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (t, gesture, command, score, response_time, session_id, is_correct)
     )
     conn.commit()
     conn.close()
@@ -190,11 +215,11 @@ async def get_logs_async(limit: int = 50) -> List[dict]:
 
 
 def _get_logs_sync(limit: int) -> List[dict]:
-    """同步获取日志(在线程中执行)"""
+    """同步获取日志"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT time, gesture, command, score FROM logs ORDER BY id DESC LIMIT ?",
+        "SELECT * FROM logs ORDER BY id DESC LIMIT ?",
         (limit,)
     )
     rows = cursor.fetchall()
@@ -240,23 +265,17 @@ def get_log_count() -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    # 启动时
     logger.info(f"启动 {settings.app_title} v{settings.app_version}")
     init_database()
-    
-    # 启动后台任务：定期清理日志
     asyncio.create_task(periodic_cleanup())
-    
     yield
-    
-    # 关闭时
     logger.info("应用正在关闭...")
 
 
 async def periodic_cleanup():
     """定期清理任务"""
     while True:
-        await asyncio.sleep(3600)  # 每小时执行一次
+        await asyncio.sleep(3600)
         await cleanup_old_logs()
 
 
@@ -267,7 +286,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -289,10 +307,10 @@ async def global_exception_handler(request, exc):
     )
 
 
-# ==================== API 端点 ====================
+# ==================== 基础API端点 ====================
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check():
-    """健康检查(详细版)"""
+    """健康检查"""
     try:
         log_count = get_log_count()
         db_status = "ok"
@@ -326,7 +344,7 @@ async def update_config(cfg: ConfigUpdate):
         new_mapping = {str(k).upper(): str(v) for k, v in cfg.mapping.items()}
         runtime_config.update_mapping(new_mapping)
     
-    logger.info(f"配置已更新: debounce={runtime_config.debounce_sec}")
+    logger.info(f"配置已更新")
     return {"ok": True, "config": runtime_config.to_dict()}
 
 
@@ -338,18 +356,10 @@ async def get_mapping():
 
 @app.post("/api/gesture/event")
 async def post_gesture(ev: GestureEvent, background_tasks: BackgroundTasks):
-    """
-    接收手势事件
-    优化:
-    - 异步日志写入
-    - 防抖逻辑优化
-    - 错误处理
-    """
+    """接收手势事件"""
     try:
         now = time.time()
         gesture = (ev.gesture or "UNKNOWN").upper()
-        
-        # 获取映射命令
         command = runtime_config.mapping.get(gesture, "NONE")
         debounce_sec = runtime_config.debounce_sec
         
@@ -363,16 +373,20 @@ async def post_gesture(ev: GestureEvent, background_tasks: BackgroundTasks):
                 "state": app_state.to_dict()
             }
         
-        # 更新触发状态
         app_state.last_trigger = {"gesture": gesture, "t": now}
-        
-        # 更新模式
         app_state.update_mode(command)
         app_state.update_gesture(gesture, command)
         
-        # 异步写入日志
+        # 异步写入日志（包含响应时间和会话ID）
         background_tasks.add_task(
-            insert_log_async, now, gesture, command, float(ev.score)
+            insert_log_async, 
+            now, 
+            gesture, 
+            command, 
+            float(ev.score),
+            float(ev.response_time or 0.0),
+            str(ev.session_id or "default"),
+            1  # is_correct 默认为1
         )
         
         return {
@@ -394,10 +408,7 @@ async def get_status():
 
 @app.get("/api/logs")
 async def get_logs(limit: int = 50):
-    """
-    获取日志记录
-    优化: 异步查询
-    """
+    """获取日志记录"""
     limit = max(1, min(500, limit))
     logs = await get_logs_async(limit)
     return logs
@@ -411,10 +422,17 @@ async def export_csv(limit: int = 200):
     
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["time", "gesture", "command", "score"])
+    writer.writerow(["time", "gesture", "command", "score", "response_time", "session_id"])
     
-    for log in reversed(logs):  # 时间正序
-        writer.writerow([log["time"], log["gesture"], log["command"], log["score"]])
+    for log in reversed(logs):
+        writer.writerow([
+            log.get("time", 0),
+            log.get("gesture", ""),
+            log.get("command", ""),
+            log.get("score", 0),
+            log.get("response_time", 0),
+            log.get("session_id", "default")
+        ])
     
     csv_bytes = output.getvalue().encode("utf-8-sig")
     return Response(
@@ -424,34 +442,368 @@ async def export_csv(limit: int = 200):
     )
 
 
-@app.post("/api/frame/preprocess")
-async def preprocess_frame(file: UploadFile = File(...)):
+# ==================== ✅ 新增：数据分析API端点 ====================
+
+@app.get("/api/analytics/summary")
+async def get_analytics_summary():
     """
-    图像预处理端点
-    优化:
-    - 文件大小验证
-    - 错误处理
-    - 异步处理
+    获取数据分析摘要
+    返回：总体统计数据
     """
     try:
-        # 读取文件
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. 总识别次数
+        cursor.execute("SELECT COUNT(*) FROM logs")
+        total_count = cursor.fetchone()[0]
+        
+        # 2. 总体准确率
+        cursor.execute("SELECT AVG(is_correct) FROM logs")
+        accuracy_result = cursor.fetchone()[0]
+        overall_accuracy = float(accuracy_result) if accuracy_result else 0.0
+        
+        # 3. 平均响应时间
+        cursor.execute("SELECT AVG(response_time) FROM logs WHERE response_time > 0")
+        avg_response_result = cursor.fetchone()[0]
+        avg_response_time = float(avg_response_result) if avg_response_result else 0.0
+        
+        # 4. 平均置信度
+        cursor.execute("SELECT AVG(score) FROM logs")
+        avg_score_result = cursor.fetchone()[0]
+        avg_confidence = float(avg_score_result) if avg_score_result else 0.0
+        
+        # 5. 今日统计
+        today_start = time.time() - 86400
+        cursor.execute("SELECT COUNT(*) FROM logs WHERE time > ?", (today_start,))
+        today_count = cursor.fetchone()[0]
+        
+        # 6. 本周统计
+        week_start = time.time() - (86400 * 7)
+        cursor.execute("SELECT COUNT(*) FROM logs WHERE time > ?", (week_start,))
+        week_count = cursor.fetchone()[0]
+        
+        # 7. 最常用的手势（TOP 3）
+        cursor.execute("""
+            SELECT gesture, COUNT(*) as count 
+            FROM logs 
+            WHERE gesture != 'UNKNOWN'
+            GROUP BY gesture 
+            ORDER BY count DESC 
+            LIMIT 3
+        """)
+        top_gestures = [{"gesture": row[0], "count": row[1]} for row in cursor.fetchall()]
+        
+        # 8. UNKNOWN手势比例
+        cursor.execute("SELECT COUNT(*) FROM logs WHERE gesture = 'UNKNOWN'")
+        unknown_count = cursor.fetchone()[0]
+        unknown_rate = (unknown_count / total_count * 100) if total_count > 0 else 0.0
+        
+        conn.close()
+        
+        return {
+            "total_recognitions": total_count,
+            "today_recognitions": today_count,
+            "week_recognitions": week_count,
+            "overall_accuracy": round(overall_accuracy * 100, 2),
+            "avg_response_time": round(avg_response_time, 2),
+            "avg_confidence": round(avg_confidence * 100, 2),
+            "unknown_rate": round(unknown_rate, 2),
+            "top_gestures": top_gestures,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"获取分析摘要失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/analytics/gestures")
+async def get_gesture_analytics():
+    """
+    获取每个手势的详细统计
+    返回：每个手势的识别次数、准确率、平均响应时间
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 获取每个手势的统计数据
+        cursor.execute("""
+            SELECT 
+                gesture,
+                COUNT(*) as total_count,
+                AVG(is_correct) as accuracy,
+                AVG(score) as avg_confidence,
+                AVG(response_time) as avg_response_time,
+                MIN(response_time) as min_response_time,
+                MAX(response_time) as max_response_time
+            FROM logs
+            GROUP BY gesture
+            ORDER BY total_count DESC
+        """)
+        
+        results = []
+        total_all = 0
+        
+        for row in cursor.fetchall():
+            gesture_data = {
+                "gesture": row[0],
+                "count": row[1],
+                "accuracy": round(float(row[2]) * 100, 2) if row[2] else 0.0,
+                "avg_confidence": round(float(row[3]) * 100, 2) if row[3] else 0.0,
+                "avg_response_time": round(float(row[4]), 2) if row[4] else 0.0,
+                "min_response_time": round(float(row[5]), 2) if row[5] else 0.0,
+                "max_response_time": round(float(row[6]), 2) if row[6] else 0.0,
+            }
+            results.append(gesture_data)
+            total_all += row[1]
+        
+        # 计算每个手势的使用频率百分比
+        for item in results:
+            item["percentage"] = round((item["count"] / total_all * 100), 2) if total_all > 0 else 0.0
+        
+        conn.close()
+        
+        return {
+            "gestures": results,
+            "total_count": total_all,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"获取手势分析失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/analytics/timeline")
+async def get_timeline_analytics(hours: int = 24):
+    """
+    获取时间线数据
+    参数：hours - 统计最近几小时的数据（默认24小时）
+    返回：按小时统计的识别次数
+    """
+    try:
+        hours = max(1, min(168, hours))  # 限制在1-168小时（7天）
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 计算时间范围
+        end_time = time.time()
+        start_time = end_time - (hours * 3600)
+        
+        # 按小时分组统计
+        cursor.execute("""
+            SELECT 
+                CAST((time - ?) / 3600 AS INTEGER) as hour_bucket,
+                COUNT(*) as count,
+                AVG(score) as avg_confidence,
+                AVG(response_time) as avg_response_time
+            FROM logs
+            WHERE time >= ? AND time <= ?
+            GROUP BY hour_bucket
+            ORDER BY hour_bucket
+        """, (start_time, start_time, end_time))
+        
+        results = []
+        for row in cursor.fetchall():
+            hour_offset = row[0]
+            timestamp = start_time + (hour_offset * 3600)
+            results.append({
+                "timestamp": int(timestamp),
+                "datetime": datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:00"),
+                "count": row[1],
+                "avg_confidence": round(float(row[2]) * 100, 2) if row[2] else 0.0,
+                "avg_response_time": round(float(row[3]), 2) if row[3] else 0.0
+            })
+        
+        conn.close()
+        
+        return {
+            "timeline": results,
+            "hours": hours,
+            "start_time": int(start_time),
+            "end_time": int(end_time)
+        }
+    
+    except Exception as e:
+        logger.error(f"获取时间线分析失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/analytics/accuracy")
+async def get_accuracy_analytics():
+    """
+    获取准确率分析
+    返回：每个手势的准确率、错误类型分析
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 1. 每个手势的准确率
+        cursor.execute("""
+            SELECT 
+                gesture,
+                COUNT(*) as total,
+                SUM(is_correct) as correct,
+                AVG(score) as avg_confidence
+            FROM logs
+            WHERE gesture != 'UNKNOWN'
+            GROUP BY gesture
+        """)
+        
+        gesture_accuracy = []
+        for row in cursor.fetchall():
+            total = row[1]
+            correct = row[2]
+            accuracy = (correct / total * 100) if total > 0 else 0.0
+            
+            gesture_accuracy.append({
+                "gesture": row[0],
+                "total": total,
+                "correct": correct,
+                "incorrect": total - correct,
+                "accuracy": round(accuracy, 2),
+                "avg_confidence": round(float(row[3]) * 100, 2) if row[3] else 0.0
+            })
+        
+        # 2. 置信度分布（分组统计）
+        cursor.execute("""
+            SELECT 
+                CASE 
+                    WHEN score >= 0.9 THEN '90-100%'
+                    WHEN score >= 0.8 THEN '80-90%'
+                    WHEN score >= 0.7 THEN '70-80%'
+                    WHEN score >= 0.6 THEN '60-70%'
+                    ELSE '<60%'
+                END as confidence_range,
+                COUNT(*) as count
+            FROM logs
+            GROUP BY confidence_range
+            ORDER BY confidence_range DESC
+        """)
+        
+        confidence_distribution = [
+            {"range": row[0], "count": row[1]} 
+            for row in cursor.fetchall()
+        ]
+        
+        # 3. 响应时间分布
+        cursor.execute("""
+            SELECT 
+                CASE 
+                    WHEN response_time < 50 THEN '<50ms'
+                    WHEN response_time < 100 THEN '50-100ms'
+                    WHEN response_time < 200 THEN '100-200ms'
+                    WHEN response_time < 500 THEN '200-500ms'
+                    ELSE '>500ms'
+                END as response_range,
+                COUNT(*) as count
+            FROM logs
+            WHERE response_time > 0
+            GROUP BY response_range
+        """)
+        
+        response_distribution = [
+            {"range": row[0], "count": row[1]} 
+            for row in cursor.fetchall()
+        ]
+        
+        conn.close()
+        
+        return {
+            "gesture_accuracy": gesture_accuracy,
+            "confidence_distribution": confidence_distribution,
+            "response_distribution": response_distribution,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"获取准确率分析失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/analytics/performance")
+async def get_performance_metrics():
+    """
+    获取性能指标
+    返回：响应时间统计、FPS统计、系统负载
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # 响应时间统计
+        cursor.execute("""
+            SELECT 
+                AVG(response_time) as avg_time,
+                MIN(response_time) as min_time,
+                MAX(response_time) as max_time,
+                COUNT(*) as sample_count
+            FROM logs
+            WHERE response_time > 0
+        """)
+        row = cursor.fetchone()
+        
+        response_stats = {
+            "avg_response_time": round(float(row[0]), 2) if row[0] else 0.0,
+            "min_response_time": round(float(row[1]), 2) if row[1] else 0.0,
+            "max_response_time": round(float(row[2]), 2) if row[2] else 0.0,
+            "sample_count": row[3]
+        }
+        
+        # 最近1小时的响应时间趋势
+        one_hour_ago = time.time() - 3600
+        cursor.execute("""
+            SELECT AVG(response_time), COUNT(*)
+            FROM logs
+            WHERE time > ? AND response_time > 0
+        """, (one_hour_ago,))
+        row = cursor.fetchone()
+        
+        recent_stats = {
+            "recent_avg_response_time": round(float(row[0]), 2) if row[0] else 0.0,
+            "recent_sample_count": row[1]
+        }
+        
+        conn.close()
+        
+        return {
+            "response_time": response_stats,
+            "recent_performance": recent_stats,
+            "system_uptime": round(app_state.get_uptime(), 2),
+            "total_requests": app_state.total_requests,
+            "error_count": app_state.error_count,
+            "avg_fps": round(app_state.get_avg_fps(), 2),
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"获取性能指标失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== OpenCV预处理端点 ====================
+@app.post("/api/frame/preprocess")
+async def preprocess_frame(file: UploadFile = File(...)):
+    """图像预处理端点"""
+    try:
         contents = await file.read()
         
-        # 文件大小检查
         if len(contents) > settings.max_file_size:
             raise HTTPException(
                 status_code=413,
-                detail=f"文件过大,最大允许 {settings.max_file_size/(1024*1024):.1f}MB"
+                detail=f"文件过大"
             )
         
-        # 解码图像
         arr = np.frombuffer(contents, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         
         if img is None:
             raise HTTPException(status_code=400, detail="无法解码图像")
         
-        # 生成文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         ms = int((time.time() * 1000) % 1000)
         base_name = f"{timestamp}_{ms}"
@@ -459,36 +811,22 @@ async def preprocess_frame(file: UploadFile = File(...)):
         orig_path = os.path.join(settings.output_dir, f"{base_name}_orig.jpg")
         proc_path = os.path.join(settings.output_dir, f"{base_name}_proc.jpg")
         
-        # 保存原图
         cv2.imwrite(orig_path, img)
         
-        # 预处理流程
         h, w = img.shape[:2]
-        
-        # 1. Resize
         target_w = 640
         scale = target_w / max(w, 1)
         new_size = (int(w * scale), int(h * scale))
         resized = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
         
-        # 2. 转灰度
         gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        
-        # 3. 高斯模糊降噪
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-        # 4. CLAHE对比度增强
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(blurred)
-        
-        # 5. Canny边缘检测
         edges = cv2.Canny(enhanced, 60, 140)
-        
-        # 6. 转回3通道保存
         processed = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
         cv2.imwrite(proc_path, processed)
         
-        # 记录日志
         await insert_log_async(time.time(), "FRAME", "PREPROCESS", 1.0)
         
         return {
