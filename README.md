@@ -919,43 +919,43 @@ engine = create_engine("sqlite:///gesture_logs.db", pool_size=5)
 - ✨ 小拇指伸直判定增强：角度法 + y 位置兜底 + wrist 距离兜底（抗斜角/遮挡）
 - 🐛 修复 SIX 在部分角度下识别困难的问题（放宽 side/open 阈值与兜底逻辑）
 
-### v1.6.0 (2026-01-02)
+### v1.6.0 (2026-01-04)
 
 - ✨ 增加骨架绘制优化：关键点 + 连线同时显示，叠加于视频画面
 - ✨ 增加 FPS 显示与运行状态提示
 - 🐛 修复 canvas 仅显示点不显示连线的问题（HAND_CONNECTIONS 正确使用）
 
-### v1.5.0 (2026-01-01)
+### v1.5.0 (2026-01-04)
 
 - ✨ 新增基础手势集：PALM / FIST / POINT / V / OK / THUMBS_UP / SIX（7 类）
 - ✨ OK 手势规则加入阈值（thumb_tip 与 index_tip 距离归一化）
 - 🐛 修复 OK 偶发误判：引入"其他三指至少两指伸直"的辅助约束
 
-### v1.4.0 (2025-12-31)
+### v1.4.0 (2026-01-04)
 
 - ✨ 前后端首次联通：前端识别结果 POST 到 FastAPI
 - ✨ 后端新增：/api/gesture/event、/api/mapping、/api/logs、/api/config
 - ✨ 引入后端去抖（debounce_sec），降低误触发
 - 🐛 修复 Windows 端 uvicorn 端口权限问题（更换端口/以管理员运行/排查占用）
 
-### v1.3.0 (2025-12-30)
+### v1.3.0 (2026-01-03)
 
 - ✨ FastAPI 后端最小可用：健康检查 /api/health
 - ✨ 支持 SQLite 日志落库与查询（运行时生成 gesture_logs.db）
 - ✨ 配置项初版：DB_PATH、DEBOUNCE_SEC、CORS_ORIGINS
 
-### v1.2.0 (2025-12-29)
+### v1.2.0 (2026-01-03)
 
 - ✨ Vue3 + Vite 前端工程初始化
 - ✨ 摄像头调用与视频画面显示（getUserMedia）
 - 🐛 修复首次启动权限/HTTPS/浏览器安全限制导致的摄像头不可用提示
 
-### v1.1.0 (2025-12-28)
+### v1.1.0 (2026-01-02)
 
 - ✨ 集成 MediaPipe Hands：实现手部关键点检测并在 Canvas 可视化
 - ✨ 关键点检测稳定性调参：minDetectionConfidence / minTrackingConfidence
 
-### v1.0.0 (2025-12-27)
+### v1.0.0 (2026-01-01)
 
 - 🎯 项目立项与原型验证：确定 Web 端方案（Vue + MediaPipe）与后端方案（FastAPI）
 - ✅ 完成基础页面原型（视频区域 + 状态栏）与技术选型
