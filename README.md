@@ -26,9 +26,8 @@
 - [安装部署](#-安装部署)
   - [后端部署](#1-后端部署)
   - [前端部署](#2-前端部署)
-  - [Docker部署](#3-docker部署可选)
 - [使用指南](#-使用指南)
-- [API文档](#-api文档)
+- [API 文档](#-api-文档)
 - [配置说明](#-配置说明)
 - [常见问题](#-常见问题)
 - [开发指南](#-开发指南)
@@ -279,6 +278,9 @@ cd backend
 **方式二：使用 venv**
 
 ```bash
+# 进入后端目录
+cd backend
+
 # 创建虚拟环境
 python -m venv venv
 
@@ -287,9 +289,6 @@ python -m venv venv
 venv\Scripts\activate
 # Linux/macOS:
 source venv/bin/activate
-
-# 进入后端目录
-cd backend
 ```
 
 #### 1.3 安装依赖
@@ -338,7 +337,8 @@ uvicorn main:app --host 0.0.0.0 --port 8001 --workers 4
 
 **验证后端启动：**
 
-打开浏览器访问：http://127.0.0.1:8001/api/health
+- `http://127.0.0.1:8001/api/health`
+- `http://127.0.0.1:8001/docs`
 
 正常响应：
 ```json
@@ -412,103 +412,7 @@ npm run preview
 
 #### 2.4 访问应用
 
-打开浏览器访问：http://localhost:5173
-
----
-
-### 3. Docker 部署（可选）
-
-#### 3.1 创建 Dockerfile
-
-**后端 Dockerfile：**
-
-```dockerfile
-# backend/Dockerfile
-FROM python:3.10-slim
-
-WORKDIR /app
-
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# 复制依赖文件
-COPY requirements.txt .
-
-# 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple
-
-# 复制应用代码
-COPY . .
-
-# 暴露端口
-EXPOSE 8001
-
-# 启动命令
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
-```
-
-**前端 Dockerfile：**
-
-```dockerfile
-# frontend/gestureControl/Dockerfile
-FROM node:18-alpine as builder
-
-WORKDIR /app
-COPY package*.json ./
-RUN npm install --registry=https://registry.npmmirror.com
-COPY . .
-RUN npm run build
-
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-```
-
-#### 3.2 创建 docker-compose.yml
-
-```yaml
-version: '3.8'
-
-services:
-  backend:
-    build: ./backend
-    container_name: gesture-backend
-    ports:
-      - "8001:8001"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - DEBUG=false
-    restart: unless-stopped
-
-  frontend:
-    build: ./frontend/gestureControl
-    container_name: gesture-frontend
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
-```
-
-#### 3.3 启动 Docker 服务
-
-```bash
-# 构建并启动
-docker-compose up -d --build
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
-```
+打开浏览器访问：`http://localhost:5173`
 
 ---
 
@@ -521,7 +425,7 @@ docker-compose down
    - 再启动前端：`npm run dev`
 
 2. **打开应用**
-   - 浏览器访问 http://localhost:5173
+   - 浏览器访问 `http://localhost:5173`
    - 确认右上角显示"后端已连接"
 
 3. **允许摄像头权限**
@@ -540,6 +444,9 @@ docker-compose down
 | 启动识别 | 点击蓝色按钮启动手势识别 |
 | OpenCV预处理 | 捕获当前帧并进行图像增强 |
 | 导出CSV | 下载识别日志的CSV文件 |
+
+> OpenCV 预处理输出默认保存在：`backend/outputs/`  
+> 通常包含：原图（raw_*）、预处理图（proc_*）等文件，便于报告截图与对比展示。
 
 ### 最佳实践
 
@@ -560,6 +467,9 @@ docker-compose down
 ---
 
 ## 📚 API 文档
+
+> **说明**：请以后端 Swagger 文档为准（`http://127.0.0.1:8001/docs`）。  
+> 若某些分析接口未启用/未实现，可作为可选扩展模块（Roadmap），不影响核心功能运行。
 
 ### 基础端点
 
@@ -666,7 +576,7 @@ GET /api/logs?limit=50
 GET /api/logs/export.csv?limit=200
 ```
 
-### 数据分析
+### 数据分析（可选模块）
 
 #### 获取分析摘要
 
@@ -689,7 +599,7 @@ GET /api/analytics/summary
     {"gesture": "PALM", "count": 980},
     {"gesture": "V", "count": 756}
   ],
-  "timestamp": "2024-01-01T12:00:00"
+  "timestamp": "2026-01-11T12:00:00"
 }
 ```
 
@@ -754,6 +664,7 @@ GET /api/analytics/performance
 | thumbUpScoreThresh | 0.25 | 拇指向上分数阈值 |
 | thumbSideScoreThresh | 0.22 | 拇指侧向分数阈值 |
 | thumbOpenThresh | 0.80 | 拇指张开阈值 |
+| thumbAbdDegThresh | 35 | 拇指外展角阈值（°），越小越严格；用于增强 SIX 与 THUMBS_UP 区分 |
 
 ---
 
@@ -983,12 +894,72 @@ engine = create_engine("sqlite:///gesture_logs.db", pool_size=5)
 - ✨ 支持左右手识别
 - 🐛 修复内存泄漏问题
 
-### v2.0.0 (2026-01-06)
+### v2.0.0 (2026-01-07)
 
 - 🎉 项目重构，前后端分离
 - ✨ 使用Vue 3 + FastAPI
 - ✨ 新增7种手势支持
 
+### v1.9.0 (2026-01-06)
+
+- ✨ 新增手势平滑：滑动窗口投票（windowSize 可调）
+- ✨ 新增"最小发送间隔"策略，减少重复触发
+- 🐛 修复日志重复显示/重复上报导致的"同一动作多条日志"问题
+- 💄 增加右侧参数面板（OK 阈值、平滑窗口、发送间隔）便于现场调参
+
+### v1.8.0 (2026-01-06)
+
+- ✨ 引入 handedness（左右手）并适配规则判定
+- 🐛 修复"摄像头正对用户导致左右手语义反转"的问题（用户视角 Left/Right 修正）
+- 🐛 修复 THUMBS_UP 与 SIX 容易混淆：加入排他规则（pinkyUp 排除点赞）
+
+### v1.7.0 (2026-01-05)
+
+- ✨ SIX 手势增强：拇指角度法 + 方向法融合
+- ✨ 小拇指伸直判定增强：角度法 + y 位置兜底 + wrist 距离兜底（抗斜角/遮挡）
+- 🐛 修复 SIX 在部分角度下识别困难的问题（放宽 side/open 阈值与兜底逻辑）
+
+### v1.6.0 (2026-01-02)
+
+- ✨ 增加骨架绘制优化：关键点 + 连线同时显示，叠加于视频画面
+- ✨ 增加 FPS 显示与运行状态提示
+- 🐛 修复 canvas 仅显示点不显示连线的问题（HAND_CONNECTIONS 正确使用）
+
+### v1.5.0 (2026-01-01)
+
+- ✨ 新增基础手势集：PALM / FIST / POINT / V / OK / THUMBS_UP / SIX（7 类）
+- ✨ OK 手势规则加入阈值（thumb_tip 与 index_tip 距离归一化）
+- 🐛 修复 OK 偶发误判：引入"其他三指至少两指伸直"的辅助约束
+
+### v1.4.0 (2025-12-31)
+
+- ✨ 前后端首次联通：前端识别结果 POST 到 FastAPI
+- ✨ 后端新增：/api/gesture/event、/api/mapping、/api/logs、/api/config
+- ✨ 引入后端去抖（debounce_sec），降低误触发
+- 🐛 修复 Windows 端 uvicorn 端口权限问题（更换端口/以管理员运行/排查占用）
+
+### v1.3.0 (2025-12-30)
+
+- ✨ FastAPI 后端最小可用：健康检查 /api/health
+- ✨ 支持 SQLite 日志落库与查询（运行时生成 gesture_logs.db）
+- ✨ 配置项初版：DB_PATH、DEBOUNCE_SEC、CORS_ORIGINS
+
+### v1.2.0 (2025-12-29)
+
+- ✨ Vue3 + Vite 前端工程初始化
+- ✨ 摄像头调用与视频画面显示（getUserMedia）
+- 🐛 修复首次启动权限/HTTPS/浏览器安全限制导致的摄像头不可用提示
+
+### v1.1.0 (2025-12-28)
+
+- ✨ 集成 MediaPipe Hands：实现手部关键点检测并在 Canvas 可视化
+- ✨ 关键点检测稳定性调参：minDetectionConfidence / minTrackingConfidence
+
+### v1.0.0 (2025-12-27)
+
+- 🎯 项目立项与原型验证：确定 Web 端方案（Vue + MediaPipe）与后端方案（FastAPI）
+- ✅ 完成基础页面原型（视频区域 + 状态栏）与技术选型
+- ✅ 形成最小闭环：前端识别 → 后端接收 → 日志记录
 
 ---
 
