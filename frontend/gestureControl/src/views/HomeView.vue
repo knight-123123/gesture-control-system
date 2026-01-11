@@ -83,6 +83,17 @@ const performanceStats = ref({
   startTime: 0,
 });
 
+// ========== 手势参考数据 ==========
+const gestureGuides = [
+  { name: "THUMBS_UP", emoji: "👍", desc: "竖起大拇指", command: "GOOD" },
+  { name: "SIX", emoji: "🤙", desc: "大拇指+小指", command: "SIX_GESTURE" },
+  { name: "PALM", emoji: "🖐️", desc: "五指张开", command: "OPEN_HAND" },
+  { name: "FIST", emoji: "✊", desc: "握拳", command: "CLOSED_HAND" },
+  { name: "POINT", emoji: "👉", desc: "食指指向", command: "POINT_FORWARD" },
+  { name: "V", emoji: "✌️", desc: "V字手势", command: "VICTORY" },
+  { name: "OK", emoji: "👌", desc: "OK手势", command: "OK_SIGN" },
+];
+
 // ========== MediaPipe 相机 ==========
 const {
   initAndStart,
@@ -140,7 +151,7 @@ onMounted(async () => {
   await fetchMapping();
   await fetchLogs();
 
-  startLogsPolling(1000);
+  startLogsPolling(3000);
   startHealthCheck(5000);
 
   statusText.value = "请求摄像头权限中...";
@@ -202,13 +213,10 @@ const runtimeFormatted = computed(() => {
         </div>
         
         <div class="status-badges">
-          <!-- 连接状态 -->
           <div class="badge" :class="{ 'badge-success': isConnected, 'badge-error': !isConnected }">
             <div class="badge-dot"></div>
             <span>{{ isConnected ? '后端已连接' : '后端未连接' }}</span>
           </div>
-
-          <!-- 版本信息 -->
           <div class="badge badge-info">
             <span>v2.3.0</span>
           </div>
@@ -227,11 +235,10 @@ const runtimeFormatted = computed(() => {
         </div>
       </transition>
 
-      <!-- 内容网格 -->
-      <div class="content-grid">
-        <!-- 左侧：视频区域 -->
-        <div class="main-panel">
-          <!-- 视频卡片 -->
+      <!-- ========== 新布局：三列设计 ========== -->
+      <div class="content-layout">
+        <!-- 左列：视频 + 操作按钮 -->
+        <div class="column-left">
           <div class="card video-card">
             <VideoStage
               @ready="onStageReady"
@@ -244,7 +251,6 @@ const runtimeFormatted = computed(() => {
             />
           </div>
 
-          <!-- 操作按钮 -->
           <div class="action-buttons">
             <button 
               class="btn btn-primary btn-large" 
@@ -265,22 +271,45 @@ const runtimeFormatted = computed(() => {
             </button>
           </div>
 
-          <!-- OpenCV结果 -->
           <transition name="fade">
             <div v-if="cvResult || cvError" class="card">
               <OpenCvPanel :cvError="cvError" :cvResult="cvResult" />
             </div>
           </transition>
+        </div>
 
-          <!-- 性能仪表盘 -->
+        <!-- 中列：手势参考 + 性能指标 + 系统状态 -->
+        <div class="column-center">
+          <!-- 手势参考卡片 -->
+          <div class="card gesture-guide-card">
+            <div class="card-header">
+              <h3>🎯 支持的手势</h3>
+            </div>
+            <div class="gesture-grid">
+              <div 
+                v-for="g in gestureGuides" 
+                :key="g.name" 
+                class="gesture-item"
+                :class="{ active: gestureText.includes(g.name) }"
+              >
+                <span class="gesture-emoji">{{ g.emoji }}</span>
+                <div class="gesture-info">
+                  <span class="gesture-name">{{ g.name }}</span>
+                  <span class="gesture-desc">{{ g.desc }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 性能指标卡片 -->
           <div class="card metrics-card">
             <div class="card-header">
               <h3>📊 性能指标</h3>
-              <div class="header-badge">实时监控</div>
+              <div class="header-badge">实时</div>
             </div>
             <div class="metrics-grid">
               <div class="metric-item">
-                <div class="metric-icon" style="background: linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%)">⏱️</div>
+                <div class="metric-icon icon-blue">⏱️</div>
                 <div class="metric-info">
                   <div class="metric-label">运行时长</div>
                   <div class="metric-value">{{ runtimeFormatted }}</div>
@@ -288,7 +317,7 @@ const runtimeFormatted = computed(() => {
               </div>
 
               <div class="metric-item">
-                <div class="metric-icon" style="background: linear-gradient(135deg, #06B6D4 0%, #3B82F6 100%)">⚡</div>
+                <div class="metric-icon icon-cyan">⚡</div>
                 <div class="metric-info">
                   <div class="metric-label">处理延迟</div>
                   <div class="metric-value">{{ performanceStats.avgLatency.toFixed(1) }}ms</div>
@@ -296,7 +325,7 @@ const runtimeFormatted = computed(() => {
               </div>
 
               <div class="metric-item">
-                <div class="metric-icon" style="background: linear-gradient(135deg, #14B8A6 0%, #0891B2 100%)">🎯</div>
+                <div class="metric-icon icon-teal">🎯</div>
                 <div class="metric-info">
                   <div class="metric-label">识别次数</div>
                   <div class="metric-value">{{ performanceStats.gestureCount }}</div>
@@ -304,7 +333,7 @@ const runtimeFormatted = computed(() => {
               </div>
 
               <div class="metric-item">
-                <div class="metric-icon" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%)">🖥️</div>
+                <div class="metric-icon icon-green">🖥️</div>
                 <div class="metric-info">
                   <div class="metric-label">后端运行</div>
                   <div class="metric-value">{{ uptimeFormatted }}</div>
@@ -312,10 +341,7 @@ const runtimeFormatted = computed(() => {
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 右侧：控制面板 -->
-        <div class="side-panel">
           <!-- 系统状态卡片 -->
           <div class="card">
             <div class="card-header">
@@ -329,7 +355,10 @@ const runtimeFormatted = computed(() => {
               :thumbScores="thumbScores"
             />
           </div>
+        </div>
 
+        <!-- 右列：手势映射 + 日志 -->
+        <div class="column-right">
           <!-- 手势映射卡片 -->
           <div class="card">
             <div class="card-header">
@@ -339,7 +368,7 @@ const runtimeFormatted = computed(() => {
           </div>
 
           <!-- 日志卡片 -->
-          <div class="card">
+          <div class="card logs-card">
             <div class="card-header">
               <h3>📝 识别日志</h3>
               <a 
@@ -347,13 +376,18 @@ const runtimeFormatted = computed(() => {
                 target="_blank"
                 class="export-btn"
               >
-                📥 导出CSV
+                📥 导出
               </a>
             </div>
             <LogsPanel :logs="logs" />
           </div>
         </div>
       </div>
+
+      <!-- 底部信息 -->
+      <footer class="footer">
+        <p>手势识别控制系统 v2.3.0 | 基于 MediaPipe + Vue 3 + FastAPI</p>
+      </footer>
     </div>
   </div>
 </template>
@@ -389,7 +423,7 @@ const runtimeFormatted = computed(() => {
   position: absolute;
   border-radius: 50%;
   filter: blur(100px);
-  opacity: 0.2;
+  opacity: 0.15;
   animation: float 25s infinite ease-in-out;
 }
 
@@ -431,7 +465,7 @@ const runtimeFormatted = computed(() => {
 .main-container {
   position: relative;
   z-index: 1;
-  max-width: 1800px;
+  max-width: 1920px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -443,8 +477,8 @@ const runtimeFormatted = computed(() => {
   align-items: center;
   background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(20px);
-  padding: 20px 30px;
-  border-radius: 20px;
+  padding: 15px 25px;
+  border-radius: 16px;
   margin-bottom: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.3);
@@ -453,11 +487,11 @@ const runtimeFormatted = computed(() => {
 .logo-section {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 12px;
 }
 
 .logo-icon {
-  font-size: 48px;
+  font-size: 40px;
   animation: wave 2s infinite;
 }
 
@@ -468,36 +502,35 @@ const runtimeFormatted = computed(() => {
 }
 
 .logo-text h1 {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
   background: linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  background-clip: text;
   margin: 0;
 }
 
 .subtitle {
-  font-size: 14px;
+  font-size: 12px;
   color: #64748B;
-  margin: 4px 0 0 0;
-  letter-spacing: 0.5px;
+  margin: 2px 0 0 0;
 }
 
 /* 状态徽章 */
 .status-badges {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .badge {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
+  gap: 6px;
+  padding: 8px 16px;
   border-radius: 50px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  transition: all 0.3s;
 }
 
 .badge-success {
@@ -519,8 +552,8 @@ const runtimeFormatted = computed(() => {
 }
 
 .badge-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: white;
   animation: pulse-dot 2s infinite;
@@ -537,18 +570,18 @@ const runtimeFormatted = computed(() => {
   align-items: center;
   gap: 15px;
   background: white;
-  padding: 20px;
-  border-radius: 15px;
+  padding: 16px 20px;
+  border-radius: 12px;
   margin-bottom: 20px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
 }
 
 .alert-warning {
-  border-left: 5px solid #F59E0B;
+  border-left: 4px solid #F59E0B;
 }
 
 .alert-icon {
-  font-size: 32px;
+  font-size: 28px;
 }
 
 .alert-content {
@@ -557,69 +590,71 @@ const runtimeFormatted = computed(() => {
 
 .alert-title {
   font-weight: 700;
-  font-size: 16px;
+  font-size: 15px;
   color: #1E293B;
-  margin-bottom: 4px;
 }
 
 .alert-message {
-  font-size: 14px;
+  font-size: 13px;
   color: #64748B;
 }
 
 .alert-close {
   background: none;
   border: none;
-  font-size: 28px;
+  font-size: 24px;
   color: #94A3B8;
   cursor: pointer;
-  transition: color 0.3s;
 }
 
-.alert-close:hover {
-  color: #1E293B;
-}
-
-/* ========== 内容网格 ========== */
-.content-grid {
+/* ========== 新布局：三列设计 ========== */
+.content-layout {
   display: grid;
-  grid-template-columns: 1fr 450px;
+  grid-template-columns: minmax(400px, 1fr) minmax(320px, 400px) minmax(280px, 350px);
   gap: 20px;
+  align-items: start;
 }
 
-@media (max-width: 1400px) {
-  .content-grid {
-    grid-template-columns: 1fr;
-  }
+.column-left,
+.column-center,
+.column-right {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 /* ========== 卡片样式 ========== */
 .card {
   background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(20px);
-  border-radius: 20px;
-  padding: 25px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.3);
   transition: transform 0.3s, box-shadow 0.3s;
 }
 
 .card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+.video-card {
+  padding: 0;
+  overflow: hidden;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20px;
-  padding-bottom: 15px;
+  margin-bottom: 15px;
+  padding-bottom: 12px;
   border-bottom: 2px solid #E2E8F0;
 }
 
 .card-header h3 {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: #1E293B;
   margin: 0;
@@ -628,79 +663,149 @@ const runtimeFormatted = computed(() => {
 .header-badge {
   background: linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%);
   color: white;
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-radius: 20px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3);
 }
 
-/* ========== 面板 ========== */
-.main-panel {
+/* ========== 手势参考卡片 ========== */
+.gesture-guide-card {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(240, 249, 255, 0.98) 100%);
+}
+
+.gesture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.gesture-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: white;
+  border-radius: 10px;
+  border: 2px solid #E2E8F0;
+  transition: all 0.3s;
+}
+
+.gesture-item:hover {
+  border-color: #0EA5E9;
+  transform: scale(1.02);
+}
+
+.gesture-item.active {
+  border-color: #10B981;
+  background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.2);
+}
+
+.gesture-emoji {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.gesture-info {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  min-width: 0;
 }
 
-.side-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-/* 视频卡片 */
-.video-card {
-  padding: 0;
+.gesture-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1E293B;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gesture-desc {
+  font-size: 11px;
+  color: #64748B;
+}
+
+/* ========== 性能指标卡片 ========== */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.metric-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: #F8FAFC;
+  border-radius: 12px;
+  border: 1px solid #E2E8F0;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.metric-item:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+}
+
+.metric-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.icon-blue { background: linear-gradient(135deg, #0EA5E9 0%, #2563EB 100%); }
+.icon-cyan { background: linear-gradient(135deg, #06B6D4 0%, #3B82F6 100%); }
+.icon-teal { background: linear-gradient(135deg, #14B8A6 0%, #0891B2 100%); }
+.icon-green { background: linear-gradient(135deg, #10B981 0%, #059669 100%); }
+
+.metric-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: #64748B;
+  font-weight: 500;
+}
+
+.metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1E293B;
 }
 
 /* ========== 操作按钮 ========== */
 .action-buttons {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 15px;
+  gap: 12px;
 }
 
 .btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 16px 24px;
+  gap: 8px;
+  padding: 14px 20px;
   border: none;
-  border-radius: 15px;
-  font-size: 16px;
+  border-radius: 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s;
-  position: relative;
-  overflow: hidden;
-}
-
-.btn::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.3);
-  transform: translate(-50%, -50%);
-  transition: width 0.6s, height 0.6s;
-}
-
-.btn:hover::before {
-  width: 300px;
-  height: 300px;
 }
 
 .btn-icon {
-  font-size: 24px;
-}
-
-.btn-large {
-  padding: 18px 28px;
+  font-size: 20px;
 }
 
 .btn-primary {
@@ -710,7 +815,7 @@ const runtimeFormatted = computed(() => {
 }
 
 .btn-primary:hover:not(:disabled) {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
   box-shadow: 0 6px 25px rgba(14, 165, 233, 0.6);
 }
 
@@ -721,7 +826,7 @@ const runtimeFormatted = computed(() => {
 }
 
 .btn-secondary:hover:not(:disabled) {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
   box-shadow: 0 6px 25px rgba(6, 182, 212, 0.6);
 }
 
@@ -731,82 +836,44 @@ const runtimeFormatted = computed(() => {
   transform: none !important;
 }
 
-/* ========== 性能指标卡片 ========== */
-.metrics-card {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.98) 100%);
-}
-
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
-}
-
-.metric-item {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 20px;
-  background: white;
-  border-radius: 15px;
-  transition: transform 0.3s, box-shadow 0.3s;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-}
-
-.metric-item:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12);
-}
-
-.metric-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 15px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 28px;
-  flex-shrink: 0;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
-
-.metric-info {
+/* ========== 日志卡片 ========== */
+.logs-card {
   flex: 1;
+  max-height: 500px;
+  display: flex;
+  flex-direction: column;
 }
 
-.metric-label {
-  font-size: 13px;
-  color: #64748B;
-  font-weight: 500;
-  margin-bottom: 4px;
-}
-
-.metric-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: #1E293B;
+.logs-card :deep(.logs) {
+  max-height: 380px;
 }
 
 /* ========== 导出按钮 ========== */
 .export-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
+  gap: 4px;
+  padding: 6px 12px;
   background: linear-gradient(135deg, #10B981 0%, #059669 100%);
   color: white;
   text-decoration: none;
-  border-radius: 10px;
-  font-size: 14px;
+  border-radius: 8px;
+  font-size: 12px;
   font-weight: 600;
   transition: all 0.3s;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
 }
 
 .export-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+}
+
+/* ========== 底部 ========== */
+.footer {
+  text-align: center;
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
 }
 
 /* ========== 动画 ========== */
@@ -828,21 +895,40 @@ const runtimeFormatted = computed(() => {
   transition: all 0.3s;
 }
 
-.slide-down-enter-from {
+.slide-down-enter-from, .slide-down-leave-to {
   opacity: 0;
   transform: translateY(-20px);
 }
 
-.slide-down-leave-to {
-  opacity: 0;
-  transform: translateY(-20px);
+/* ========== 响应式布局 ========== */
+@media (max-width: 1400px) {
+  .content-layout {
+    grid-template-columns: 1fr 1fr;
+  }
+  
+  .column-right {
+    grid-column: span 2;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
 }
 
-/* ========== 响应式 ========== */
+@media (max-width: 1024px) {
+  .content-layout {
+    grid-template-columns: 1fr;
+  }
+  
+  .column-right {
+    grid-column: span 1;
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 768px) {
   .top-bar {
     flex-direction: column;
-    gap: 15px;
+    gap: 12px;
     text-align: center;
   }
 
@@ -853,9 +939,13 @@ const runtimeFormatted = computed(() => {
   .metrics-grid {
     grid-template-columns: 1fr;
   }
+  
+  .gesture-grid {
+    grid-template-columns: 1fr;
+  }
 
   .logo-text h1 {
-    font-size: 22px;
+    font-size: 20px;
   }
 }
 </style>

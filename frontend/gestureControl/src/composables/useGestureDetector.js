@@ -1,5 +1,13 @@
 /**
  * 手势识别检测器 - 修复版 v3.0
+ * 
+ * 修复内容：
+ * 1. 重新设计 THUMBS_UP 和 SIX 的区分逻辑（基于拇指方向而非仅小指状态）
+ * 2. 放宽小指判断条件，增加多层级判断
+ * 3. 优化 UNKNOWN 减少率，增加模糊匹配
+ * 4. 添加置信度评分系统
+ * 5. 增强调试信息输出
+ * 
  * 支持的手势（共7种 + UNKNOWN）：
  * 1. THUMBS_UP - 👍 大拇指点赞（拇指向上，其他手指弯曲）
  * 2. SIX - 🤙 打电话手势（大拇指+小指伸开，拇指向侧边）
@@ -13,7 +21,8 @@
 import { ref } from "vue";
 
 // ========== 调试开关 ==========
-const DEBUG = false;  // 开启调试模式帮助排查
+// 生产环境自动关闭，开发环境可手动开启
+const DEBUG = false;  // 调试完毕后关闭，减少控制台输出
 
 export function useGestureDetector(paramsRef) {
   const thumbScores = ref({
