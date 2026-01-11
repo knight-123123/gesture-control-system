@@ -1,15 +1,8 @@
 /**
- * 手势识别检测器 - 终极修复版
- * 
- * 修复内容：
- * 1. 严格区分 THUMBS_UP 和 SIX（不再混淆）
- * 2. 提高小指判断精度
- * 3. 优化 POINT 识别（更容易识别）
- * 4. 重新设计判断优先级
- * 
+ * 手势识别检测器 - 修复版 v3.0
  * 支持的手势（共7种 + UNKNOWN）：
- * 1. THUMBS_UP - 👍 大拇指点赞
- * 2. SIX - 🤙 大拇指+小指
+ * 1. THUMBS_UP - 👍 大拇指点赞（拇指向上，其他手指弯曲）
+ * 2. SIX - 🤙 打电话手势（大拇指+小指伸开，拇指向侧边）
  * 3. PALM - 🖐️ 五指张开
  * 4. FIST - ✊ 握拳
  * 5. POINT - 👉 食指指向
@@ -19,8 +12,8 @@
  */
 import { ref } from "vue";
 
-// 调试模式
-const DEBUG = false;
+// ========== 调试开关 ==========
+const DEBUG = false;  // 开启调试模式帮助排查
 
 export function useGestureDetector(paramsRef) {
   const thumbScores = ref({
@@ -28,6 +21,14 @@ export function useGestureDetector(paramsRef) {
     side: 0,
     open: 0,
     abdDeg: 0,
+  });
+
+  // 调试数据（可在UI中显示）
+  const debugInfo = ref({
+    fingers: {},
+    thumb: {},
+    pinkyScores: {},
+    decision: ''
   });
 
   // ========== 数学工具函数 ==========
@@ -128,46 +129,96 @@ export function useGestureDetector(paramsRef) {
   // ========== 手指状态检测（优化版） ==========
   
   /**
-   * 判断手指是否伸直（放宽条件，更容易识别）
+   * 判断手指是否伸直（标准版）
    */
   function isFingerExtended(landmarks, mcpIdx, pipIdx, dipIdx, tipIdx) {
     const p = paramsRef.value;
-    const c = cosAngle(landmarks[mcpIdx], landmarks[pipIdx], landmarks[dipIdx]);
     
-    // 放宽角度判断
-    const angleExtended = c < (p.angleCosThresh + 0.05);
+    // 角度检查：PIP关节角度
+    const pipAngle = cosAngle(landmarks[mcpIdx], landmarks[pipIdx], landmarks[dipIdx]);
+    const angleExtended = pipAngle < (p.angleCosThresh + 0.1);  // 放宽阈值
     
-    // tip要在dip上方（放宽要求）
-    const tipAboveDip = landmarks[tipIdx].y < (landmarks[dipIdx].y + 0.02);
+    // Y坐标检查：tip 要在 pip 上方（更合理的参考点）
+    const tipAbovePip = landmarks[tipIdx].y < landmarks[pipIdx].y;
     
-    return angleExtended && tipAboveDip;
+    // 备用：tip 至少在 dip 上方或附近
+    const tipNearOrAboveDip = landmarks[tipIdx].y < (landmarks[dipIdx].y + 0.03);
+    
+    return angleExtended && (tipAbovePip || tipNearOrAboveDip);
   }
 
   /**
-   * ✅ 新增：严格判断小指是否伸直（用于区分 THUMBS_UP 和 SIX）
+   * ✅ 重新设计：小指伸直判断（多层级）
+   * 返回一个分数而不是布尔值，0-1范围
    */
-  function isPinkyStrictlyExtended(landmarks) {
-    const p = paramsRef.value;
+  function getPinkyExtensionScore(landmarks) {
+    const palmScale = dist(landmarks[0], landmarks[5]) + 1e-6;
     
-    // 1. 角度检查（必须满足）
-    const angleCheck = cosAngle(landmarks[17], landmarks[18], landmarks[19]) < p.angleCosThresh;
+    // 1. 角度分数（PIP关节）
+    const pipAngle = cosAngle(landmarks[17], landmarks[18], landmarks[19]);
+    // cos < -0.7 表示伸直，转换为0-1分数
+    const angleScore = clamp(((-0.7) - pipAngle) / 0.3 + 0.5, 0, 1);
     
-    // 2. Y坐标检查（tip 必须明显高于 dip）
-    const yCheck = landmarks[20].y < (landmarks[19].y - 0.03);
+    // 2. Y坐标分数（tip相对于mcp的位置）
+    const tipY = landmarks[20].y;
+    const mcpY = landmarks[17].y;
+    const dipY = landmarks[19].y;
+    // tip应该在mcp上方
+    const yDiff = (mcpY - tipY) / palmScale;
+    const yScore = clamp(yDiff * 2 + 0.3, 0, 1);
     
-    // 3. 距离检查（tip 到 wrist 的距离明显大于 mcp 到 wrist）
+    // 3. 距离分数（tip到wrist vs mcp到wrist）
     const distTipToWrist = dist(landmarks[20], landmarks[0]);
     const distMcpToWrist = dist(landmarks[17], landmarks[0]);
-    const distCheck = distTipToWrist > (distMcpToWrist * 1.15);
+    const distRatio = distTipToWrist / distMcpToWrist;
+    // 比值>1.1表示伸直
+    const distScore = clamp((distRatio - 1.0) * 5, 0, 1);
     
-    // ✅ 必须同时满足所有条件（严格判断）
-    return angleCheck && yCheck && distCheck;
+    // 4. 小指相对于无名指的位置（小指tip应该比无名指tip更远离手腕）
+    const pinkyTipDist = dist(landmarks[20], landmarks[0]);
+    const ringTipDist = dist(landmarks[16], landmarks[0]);
+    const relativeScore = pinkyTipDist > ringTipDist * 0.8 ? 0.5 : 0;
+    
+    // 综合分数（加权平均）
+    const totalScore = angleScore * 0.35 + yScore * 0.25 + distScore * 0.25 + relativeScore * 0.15;
+    
+    return {
+      total: totalScore,
+      angle: angleScore,
+      y: yScore,
+      dist: distScore,
+      relative: relativeScore
+    };
+  }
+
+  /**
+   * ✅ 小指是否伸直（宽松版）- 用于一般判断
+   */
+  function isPinkyExtendedLoose(landmarks) {
+    const score = getPinkyExtensionScore(landmarks);
+    return score.total > 0.35;  // 宽松阈值
+  }
+
+  /**
+   * ✅ 小指是否伸直（中等版）- 用于 SIX 判断
+   */
+  function isPinkyExtendedMedium(landmarks) {
+    const score = getPinkyExtensionScore(landmarks);
+    return score.total > 0.45;  // 中等阈值
+  }
+
+  /**
+   * ✅ 小指是否弯曲（严格版）- 用于 THUMBS_UP 判断
+   */
+  function isPinkyDefinitelyCurled(landmarks) {
+    const score = getPinkyExtensionScore(landmarks);
+    return score.total < 0.30;  // 必须明确弯曲
   }
 
   function isThumbStraight(landmarks) {
     const p = paramsRef.value;
     const c = cosAngle(landmarks[2], landmarks[3], landmarks[4]);
-    const thresh = Math.min(-0.65, p.angleCosThresh + 0.05);
+    const thresh = Math.min(-0.6, p.angleCosThresh + 0.1);  // 稍微放宽
     return c < thresh;
   }
 
@@ -184,13 +235,56 @@ export function useGestureDetector(paramsRef) {
     
     const middleUp = isFingerExtended(landmarks, 9, 10, 11, 12);
     const ringUp = isFingerExtended(landmarks, 13, 14, 15, 16);
-    const pinkyUp = isFingerExtended(landmarks, 17, 18, 19, 20);
+    const pinkyUp = isPinkyExtendedLoose(landmarks);
     
     const otherFingersUp = [middleUp, ringUp, pinkyUp].filter(Boolean).length;
     return tipDist < p.okThresh && otherFingersUp >= 2;
   }
 
-  // ========== 主识别函数 ==========
+  // ========== PALM手势检测（专用函数） ==========
+  
+  function detectPALM(landmarks, palmScale) {
+    // PALM特征：五指全部张开
+    // 使用多种方法综合判断，提高识别率
+    
+    // 方法1：所有指尖都在对应PIP关节上方
+    const allTipsAbovePip = 
+      landmarks[8].y < landmarks[6].y &&   // 食指
+      landmarks[12].y < landmarks[10].y && // 中指
+      landmarks[16].y < landmarks[14].y && // 无名指
+      landmarks[20].y < landmarks[18].y;   // 小指
+    
+    // 方法2：所有指尖到手腕的距离都大于MCP到手腕的距离
+    const indexExtended = dist(landmarks[8], landmarks[0]) > dist(landmarks[5], landmarks[0]) * 1.1;
+    const middleExtended = dist(landmarks[12], landmarks[0]) > dist(landmarks[9], landmarks[0]) * 1.1;
+    const ringExtended = dist(landmarks[16], landmarks[0]) > dist(landmarks[13], landmarks[0]) * 1.1;
+    const pinkyExtended = dist(landmarks[20], landmarks[0]) > dist(landmarks[17], landmarks[0]) * 1.05;
+    
+    const distanceCheck = [indexExtended, middleExtended, ringExtended, pinkyExtended]
+      .filter(Boolean).length >= 3;
+    
+    // 方法3：拇指展开（拇指尖离食指根部足够远）
+    const thumbSpread = dist(landmarks[4], landmarks[5]) / palmScale > 0.5;
+    
+    // 方法4：手指间有足够间距（表示张开而非并拢）
+    const fingerSpread = 
+      dist(landmarks[8], landmarks[12]) / palmScale > 0.15 &&
+      dist(landmarks[12], landmarks[16]) / palmScale > 0.1;
+    
+    // 综合判断：多个条件满足即可
+    const score = (allTipsAbovePip ? 1 : 0) + 
+                  (distanceCheck ? 1 : 0) + 
+                  (thumbSpread ? 1 : 0) + 
+                  (fingerSpread ? 0.5 : 0);
+    
+    if (DEBUG && score >= 2) {
+      console.log(`  PALM check: tips=${allTipsAbovePip}, dist=${distanceCheck}, thumb=${thumbSpread}, spread=${fingerSpread}, score=${score}`);
+    }
+    
+    return score >= 2.5;
+  }
+
+  // ========== 主识别函数（重新设计） ==========
   
   function detectGesture(landmarks, handedness = "Unknown") {
     if (!landmarks || landmarks.length !== 21) {
@@ -198,22 +292,22 @@ export function useGestureDetector(paramsRef) {
     }
 
     const p = paramsRef.value;
-
-    // ===== 1. 计算基础特征 =====
     const palmScale = dist(landmarks[0], landmarks[5]) + 1e-6;
 
-    // 四指伸直检测（使用优化后的判断）
+    // ===== 1. 计算所有基础特征 =====
+    
+    // 四指状态
     const indexUp = isFingerExtended(landmarks, 5, 6, 7, 8);
     const middleUp = isFingerExtended(landmarks, 9, 10, 11, 12);
     const ringUp = isFingerExtended(landmarks, 13, 14, 15, 16);
     
-    // ✅ 小指使用宽松判断（用于 PALM）
-    const pinkyUpLoose = isFingerExtended(landmarks, 17, 18, 19, 20);
+    // 小指多层级判断
+    const pinkyScore = getPinkyExtensionScore(landmarks);
+    const pinkyUp = isPinkyExtendedLoose(landmarks);
+    const pinkyUpMedium = isPinkyExtendedMedium(landmarks);
+    const pinkyCurled = isPinkyDefinitelyCurled(landmarks);
     
-    // ✅ 小指使用严格判断（用于 SIX 和 THUMBS_UP 区分）
-    const pinkyUpStrict = isPinkyStrictlyExtended(landmarks);
-
-    const fingersUpCount = [indexUp, middleUp, ringUp, pinkyUpLoose].filter(Boolean).length;
+    const fingersUpCount = [indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
 
     // 拇指特征
     const thumbStraight = isThumbStraight(landmarks);
@@ -230,46 +324,56 @@ export function useGestureDetector(paramsRef) {
     };
 
     const thumbIsOpen = thumbOpen > p.thumbOpenThresh;
-    const thumbPointsUp = thumbScoresInBasis.up > p.thumbUpScoreThresh;
-    const thumbPointsSide = Math.abs(thumbScoresInBasis.side) > p.thumbSideScoreThresh;
-
-    // 拇指向上判断（适度宽松）
-    const thumbPointsUpRelaxed = thumbScoresInBasis.up > 0.15;
     
-    // 拇指tip在所有指关节上方
-    const thumbTipAboveAll = 
-      landmarks[4].y < landmarks[8].y &&
-      landmarks[4].y < landmarks[12].y &&
-      landmarks[4].y < landmarks[16].y &&
-      landmarks[4].y < landmarks[20].y;
+    // ✅ 关键改进：拇指方向判断
+    // thumbScoresInBasis.up > 0.2 表示拇指明显向上
+    // |thumbScoresInBasis.side| > 0.3 表示拇指明显向侧边
+    const thumbPointsUp = thumbScoresInBasis.up > 0.15;
+    const thumbPointsSide = Math.abs(thumbScoresInBasis.side) > 0.25;
+    const thumbPointsMoreUp = thumbScoresInBasis.up > Math.abs(thumbScoresInBasis.side) * 0.8;
+    const thumbPointsMoreSide = Math.abs(thumbScoresInBasis.side) > thumbScoresInBasis.up * 0.8;
+    
+    // 拇指tip在所有弯曲手指的指尖上方
+    const thumbTipAboveCurledFingers = 
+      (!indexUp || landmarks[4].y < landmarks[8].y) &&
+      (!middleUp || landmarks[4].y < landmarks[12].y) &&
+      (!ringUp || landmarks[4].y < landmarks[16].y);
 
     // 调试输出
     if (DEBUG) {
-      console.log({
-        gesture: "detecting...",
+      debugInfo.value = {
         fingers: { 
           index: indexUp, 
           middle: middleUp, 
           ring: ringUp, 
-          pinkyLoose: pinkyUpLoose,
-          pinkyStrict: pinkyUpStrict 
+          pinky: pinkyUp,
+          pinkyMedium: pinkyUpMedium,
+          pinkyCurled: pinkyCurled,
+          count: fingersUpCount
         },
-        fingersUpCount,
         thumb: {
           straight: thumbStraight,
-          open: thumbOpen,
-          pointsUp: thumbPointsUp,
-          pointsUpRelaxed: thumbPointsUpRelaxed,
-          pointsSide: thumbPointsSide,
-          abdDeg: thumbAbduction.abdDeg,
-          tipAboveAll: thumbTipAboveAll,
+          open: thumbOpen.toFixed(2),
+          upScore: thumbScoresInBasis.up.toFixed(2),
+          sideScore: thumbScoresInBasis.side.toFixed(2),
+          abdDeg: thumbAbduction.abdDeg.toFixed(1),
+          pointsMoreUp: thumbPointsMoreUp,
+          pointsMoreSide: thumbPointsMoreSide
+        },
+        pinkyScores: {
+          total: pinkyScore.total.toFixed(2),
+          angle: pinkyScore.angle.toFixed(2),
+          y: pinkyScore.y.toFixed(2),
+          dist: pinkyScore.dist.toFixed(2)
         }
-      });
+      };
+      
+      console.log("🔍 Gesture Detection:", JSON.stringify(debugInfo.value, null, 2));
     }
 
-    // ===== 2. 手势判断逻辑（重新设计的优先级） =====
+    // ===== 2. 手势判断逻辑（重新设计优先级） =====
 
-    // 1. OK手势（优先级最高）
+    // 1. OK手势（优先级最高，因为特征最独特）
     if (detectOK(landmarks, palmScale)) {
       if (DEBUG) console.log("✅ Detected: OK");
       return "OK";
@@ -281,54 +385,122 @@ export function useGestureDetector(paramsRef) {
       return "FIST";
     }
 
-    // 3. PALM - 五指全开
-    if (fingersUpCount === 4 && thumbIsOpen && thumbStraight) {
+    // 3. PALM - 五指全开（使用专用检测函数）
+    if (detectPALM(landmarks, palmScale)) {
       if (DEBUG) console.log("✅ Detected: PALM");
       return "PALM";
     }
 
-    // ✅ 4. THUMBS_UP - 只有拇指竖起（优先于其他手势）
-    // 关键改进：明确排除小指伸直（使用严格判断）
-    if (
-      !indexUp &&                                      // 食指必须弯曲
-      !middleUp &&                                     // 中指必须弯曲
-      !ringUp &&                                       // 无名指必须弯曲
-      !pinkyUpStrict &&                                // ✅ 小指必须弯曲（严格判断）
-      thumbStraight &&                                 // 拇指伸直
-      (thumbPointsUpRelaxed || thumbTipAboveAll) &&   // 拇指向上
-      thumbAbduction.abdDeg > 30                       // 外展角度 > 30°
-    ) {
-      if (DEBUG) console.log("✅ Detected: THUMBS_UP (strict pinky check)");
-      return "THUMBS_UP";
-    }
-
-    // ✅ 5. SIX - 拇指和小指都伸开（使用严格的小指判断）
-    if (
-      pinkyUpStrict &&                                 // ✅ 小指必须伸直（严格判断）
-      !indexUp &&
-      !middleUp &&
-      !ringUp &&
-      thumbStraight &&
-      thumbPointsSide &&
-      thumbAbduction.abdDeg < 50                       // 放宽角度限制
-    ) {
-      if (DEBUG) console.log("✅ Detected: SIX (strict pinky check)");
-      return "SIX";
-    }
-
-    // 6. POINT - 只有食指伸直（放宽条件）
-    if (indexUp && !middleUp && !ringUp && !pinkyUpLoose) {
-      if (DEBUG) console.log("✅ Detected: POINT");
-      return "POINT";
-    }
-
-    // 7. V - 食指和中指伸直
-    if (indexUp && middleUp && !ringUp && !pinkyUpLoose) {
+    // 4. V - 食指和中指伸直
+    if (indexUp && middleUp && !ringUp && !pinkyUp) {
       if (DEBUG) console.log("✅ Detected: V");
       return "V";
     }
 
-    // 8. UNKNOWN
+    // 5. POINT - 只有食指伸直
+    if (indexUp && !middleUp && !ringUp && !pinkyUp) {
+      if (DEBUG) console.log("✅ Detected: POINT");
+      return "POINT";
+    }
+
+    // ===== 6&7. THUMBS_UP 和 SIX 的区分（核心改进） =====
+    
+    // 共同条件：食指、中指、无名指都弯曲，拇指伸直
+    const thumbsUpOrSixBase = !indexUp && !middleUp && !ringUp && thumbStraight;
+    
+    if (thumbsUpOrSixBase) {
+      // ✅ 核心区分逻辑：综合判断拇指方向和小指状态
+      
+      // THUMBS_UP 条件：
+      // - 拇指明显向上（up分数高）
+      // - 小指明确弯曲（curled）
+      // - 或者：拇指的"向上"程度明显大于"向侧"程度
+      const isThumbsUp = (
+        (thumbPointsUp && thumbPointsMoreUp && pinkyCurled) ||
+        (thumbScoresInBasis.up > 0.25 && pinkyScore.total < 0.35) ||
+        (thumbTipAboveCurledFingers && pinkyCurled && thumbAbduction.abdDeg > 40)
+      );
+      
+      // SIX 条件：
+      // - 小指伸直（medium及以上）
+      // - 拇指向侧边或向下（up分数低或side分数高）
+      // - 或者：小指明确伸直且拇指没有明显向上
+      const isSix = (
+        (pinkyUpMedium && (thumbPointsMoreSide || thumbScoresInBasis.up < 0.15)) ||
+        (pinkyScore.total > 0.5 && !thumbPointsMoreUp) ||
+        (pinkyUpMedium && thumbAbduction.abdDeg < 35)
+      );
+      
+      if (DEBUG) {
+        console.log(`  THUMBS_UP conditions: ${isThumbsUp}`);
+        console.log(`  SIX conditions: ${isSix}`);
+      }
+      
+      // 优先级判断
+      if (isThumbsUp && !isSix) {
+        if (DEBUG) console.log("✅ Detected: THUMBS_UP");
+        return "THUMBS_UP";
+      }
+      
+      if (isSix && !isThumbsUp) {
+        if (DEBUG) console.log("✅ Detected: SIX");
+        return "SIX";
+      }
+      
+      // 如果都满足或都不满足，使用更细致的比较
+      if (isThumbsUp && isSix) {
+        // 冲突情况：根据各项分数综合判断
+        const thumbsUpConfidence = thumbScoresInBasis.up * 0.5 + (1 - pinkyScore.total) * 0.5;
+        const sixConfidence = pinkyScore.total * 0.5 + (1 - thumbScoresInBasis.up) * 0.3 + Math.abs(thumbScoresInBasis.side) * 0.2;
+        
+        if (DEBUG) {
+          console.log(`  Conflict! THUMBS_UP conf: ${thumbsUpConfidence.toFixed(2)}, SIX conf: ${sixConfidence.toFixed(2)}`);
+        }
+        
+        if (thumbsUpConfidence > sixConfidence + 0.1) {
+          if (DEBUG) console.log("✅ Detected: THUMBS_UP (by confidence)");
+          return "THUMBS_UP";
+        } else if (sixConfidence > thumbsUpConfidence + 0.1) {
+          if (DEBUG) console.log("✅ Detected: SIX (by confidence)");
+          return "SIX";
+        }
+        // 如果置信度接近，优先判断为小指状态更明确的那个
+        if (pinkyScore.total > 0.5) {
+          if (DEBUG) console.log("✅ Detected: SIX (pinky clearly extended)");
+          return "SIX";
+        }
+        if (DEBUG) console.log("✅ Detected: THUMBS_UP (default in conflict)");
+        return "THUMBS_UP";
+      }
+      
+      // 如果基础条件满足但都不符合THUMBS_UP和SIX的具体条件
+      // 尝试宽松匹配
+      if (pinkyScore.total > 0.4) {
+        if (DEBUG) console.log("✅ Detected: SIX (fallback - pinky somewhat extended)");
+        return "SIX";
+      }
+      if (thumbScoresInBasis.up > 0.1) {
+        if (DEBUG) console.log("✅ Detected: THUMBS_UP (fallback - thumb somewhat up)");
+        return "THUMBS_UP";
+      }
+    }
+
+    // 8. 模糊匹配 - 尝试找最接近的手势
+    // 如果到这里还没返回，尝试宽松匹配
+    
+    // 可能是不标准的 THUMBS_UP（拇指伸出，其他弯曲）
+    if (fingersUpCount <= 1 && thumbStraight && thumbIsOpen && thumbPointsUp) {
+      if (DEBUG) console.log("✅ Detected: THUMBS_UP (relaxed match)");
+      return "THUMBS_UP";
+    }
+    
+    // 可能是不标准的 SIX
+    if (pinkyUpMedium && thumbStraight && fingersUpCount <= 2) {
+      if (DEBUG) console.log("✅ Detected: SIX (relaxed match)");
+      return "SIX";
+    }
+
+    // 9. UNKNOWN
     if (DEBUG) console.log("⚠️ Detected: UNKNOWN");
     return "UNKNOWN";
   }
@@ -336,5 +508,6 @@ export function useGestureDetector(paramsRef) {
   return {
     detectGesture,
     thumbScores,
+    debugInfo,  // 导出调试信息供UI使用
   };
 }
