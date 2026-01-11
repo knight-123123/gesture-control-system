@@ -878,7 +878,7 @@ engine = create_engine("sqlite:///gesture_logs.db", pool_size=5)
 - ✨ 新增手势参考卡片
 - 🐛 修复THUMBS_UP和SIX混淆问题
 - 🐛 修复PALM无法识别问题
-- 💄 优化页面布局为三列设计
+- 💄 优化页面布局设计
 - 📝 完善README文档
 
 ### v2.2.0 (2026-01-09)
